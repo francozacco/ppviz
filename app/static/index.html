@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ppviz — pandapower grid viewer</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.2/cytoscape.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<header>
+  <h1>ppviz</h1>
+  <label class="btn" for="file-input">Upload net</label>
+  <button id="run-btn" class="btn" disabled>&#9654; Run DC PF</button>
+  <input type="file" id="file-input" accept=".json,.pkl,.p" />
+  <span id="file-name">No file chosen</span>
+  <span id="status"></span>
+  <div id="search-container">
+    <input id="search-input" type="search" placeholder="Search element…" autocomplete="off" disabled />
+    <div id="search-dropdown"></div>
+  </div>
+</header>
+
+<main>
+  <div id="sens-panel">
+    <div id="sens-header">
+      <h2>PTDF Sensitivity</h2>
+      <button id="sens-collapse" title="Collapse">&#8249;</button>
+    </div>
+    <div id="sens-collapsed-tab">
+      <button id="sens-expand" title="Expand">&#8250;</button>
+      <span id="sens-tab-label">PTDF</span>
+    </div>
+    <div id="sens-body">
+      <canvas id="sens-canvas"></canvas>
+    </div>
+    <div id="sens-resize-handle"></div>
+  </div>
+  <div id="cy-container">
+    <div id="cy"></div>
+    <div id="tooltip">
+      <div id="tooltip-info"></div>
+      <button id="tooltip-btn"></button>
+      <div id="tooltip-pmw-edit">
+        <input id="tooltip-pmw-input" type="number" step="any" />
+        <button id="tooltip-pmw-apply">Apply</button>
+      </div>
+    </div>
+  </div>
+  <aside id="sidebar">
+    <h2>Summary</h2>
+    <div id="summary-content">
+      <p style="font-size:0.78rem;color:#64748b">Upload a net to see stats.</p>
+    </div>
+    <div id="legend">
+      <h2>Legend</h2>
+
+      <div class="legend-item" data-toggle="bus">
+        <svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="#cbd5e1"/></svg>
+        <span>Bus</span>
+      </div>
+      <div class="legend-item" data-toggle="line">
+        <svg width="28" height="6"><line x1="0" y1="3" x2="28" y2="3" stroke="#60a5fa" stroke-width="2"/></svg>
+        <span>Line</span>
+      </div>
+      <div class="legend-item" data-toggle="trafo">
+        <svg width="14" height="14" viewBox="0 0 14 14">
+          <circle cx="7" cy="7" r="5" fill="none" stroke="#f59e0b" stroke-width="2"/>
+        </svg>
+        <span>Trafo</span>
+      </div>
+      <div class="legend-item" data-toggle="trafo3w">
+        <svg width="14" height="14" viewBox="0 0 14 14">
+          <circle cx="7" cy="7" r="5" fill="none" stroke="#c084fc" stroke-width="2"/>
+        </svg>
+        <span>Trafo 3W</span>
+      </div>
+      <div class="legend-item" data-toggle="gen">
+        <svg width="14" height="14"><circle cx="7" cy="7" r="6" fill="#2dd4bf"/></svg>
+        <span>Generator / Static Gen</span>
+      </div>
+      <div class="legend-item" data-toggle="load">
+        <svg width="9" height="9" viewBox="0 0 9 9">
+          <polygon points="4.5,8.5 8.5,0.5 0.5,0.5" fill="#f472b6"/>
+        </svg>
+        <span>Load</span>
+      </div>
+      <div class="legend-item" data-toggle="ext_grid">
+        <svg width="13" height="13"><circle cx="6.5" cy="6.5" r="5.5" fill="#f87171"/></svg>
+        <span>Ext. Grid bus</span>
+      </div>
+      <div class="legend-item" style="margin-top:6px;opacity:0.45">
+        <svg width="28" height="6">
+          <line x1="0" y1="3" x2="28" y2="3" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4,3"/>
+        </svg>
+        <span>Out of service</span>
+      </div>
+    </div>
+
+    <div id="loading-legend">
+      <h2>Loading %</h2>
+      <div id="loading-bar"></div>
+      <div id="loading-ticks">
+        <span>0 %</span>
+        <span>≥100 %</span>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>
