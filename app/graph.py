@@ -147,27 +147,41 @@ def _bus_geodata(net: pp.pandapowerNet) -> dict[int, tuple[float, float]]:
     return _scale_geodata(result)
 
 
+def _get_table(net: pp.pandapowerNet, name: str) -> pd.DataFrame:
+    """Return net[name] as a DataFrame, falling back to an empty one if absent."""
+    try:
+        df = getattr(net, name)
+        return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    except (AttributeError, KeyError):
+        return pd.DataFrame()
+
+
 def _build_graph(net: pp.pandapowerNet) -> dict[str, Any]:
     nodes: list[dict] = []
     edges: list[dict] = []
 
-    ext_grid_buses: set[int] = set(net.ext_grid["bus"].tolist()) if len(net.ext_grid) else set()
+    ext_grid = _get_table(net, "ext_grid")
+    ext_grid_buses: set[int] = (
+        set(int(b) for b in ext_grid["bus"])
+        if len(ext_grid) and "bus" in ext_grid.columns
+        else set()
+    )
     geo = _bus_geodata(net)
 
-    for idx, row in net.bus.iterrows():
+    for idx, row in _get_table(net, "bus").iterrows():
         gx, gy = geo.get(int(idx), (None, None))
         nodes.append(_node(
             f"bus_{idx}",
             _lbl(row, "name", f"Bus {idx}"),
             "bus",
             bool(row.get("in_service", True)),
-            vn_kv=float(row.get("vn_kv", 0)),
+            vn_kv=_opt_float(row, "vn_kv") or 0.0,
             has_ext_grid=int(idx) in ext_grid_buses,
             x=gx,
             y=gy,
         ))
 
-    for idx, row in net.line.iterrows():
+    for idx, row in _get_table(net, "line").iterrows():
         edges.append(_edge(
             f"line_{idx}",
             f"bus_{int(row['from_bus'])}",
@@ -178,7 +192,7 @@ def _build_graph(net: pp.pandapowerNet) -> dict[str, Any]:
             max_p_mw=_opt_float(row, "max_p_mw"),
         ))
 
-    for idx, row in net.trafo.iterrows():
+    for idx, row in _get_table(net, "trafo").iterrows():
         edges.append(_edge(
             f"trafo_{idx}",
             f"bus_{int(row['hv_bus'])}",
@@ -189,7 +203,7 @@ def _build_graph(net: pp.pandapowerNet) -> dict[str, Any]:
             max_p_mw=_opt_float(row, "max_p_mw"),
         ))
 
-    for idx, row in net.trafo3w.iterrows():
+    for idx, row in _get_table(net, "trafo3w").iterrows():
         tid = f"trafo3w_{idx}"
         svc = bool(row.get("in_service", True))
         # Position hub at centroid of its three buses (if geodata available)
@@ -210,33 +224,34 @@ def _build_graph(net: pp.pandapowerNet) -> dict[str, Any]:
         edges.append(_edge(f"{tid}_mv", f"bus_{int(row['mv_bus'])}", tid, "trafo_conn", svc))
         edges.append(_edge(f"{tid}_lv", f"bus_{int(row['lv_bus'])}", tid, "trafo_conn", svc))
 
-    for idx, row in net.gen.iterrows():
+    for idx, row in _get_table(net, "gen").iterrows():
         gid = f"gen_{idx}"
         nodes.append(_node(gid, _lbl(row, "name", f"Gen {idx}"), "gen",
-                           bool(row.get("in_service", True)), p_mw=float(row.get("p_mw", 0))))
+                           bool(row.get("in_service", True)), p_mw=_opt_float(row, "p_mw") or 0.0))
         edges.append(_edge(f"{gid}_conn", gid, f"bus_{int(row['bus'])}", "connection", True))
 
-    for idx, row in net.sgen.iterrows():
+    for idx, row in _get_table(net, "sgen").iterrows():
         sid = f"sgen_{idx}"
         nodes.append(_node(sid, _lbl(row, "name", f"SGn {idx}"), "sgen",
-                           bool(row.get("in_service", True)), p_mw=float(row.get("p_mw", 0))))
+                           bool(row.get("in_service", True)), p_mw=_opt_float(row, "p_mw") or 0.0))
         edges.append(_edge(f"{sid}_conn", sid, f"bus_{int(row['bus'])}", "connection", True))
 
-    for idx, row in net.load.iterrows():
+    for idx, row in _get_table(net, "load").iterrows():
         lid = f"load_{idx}"
         nodes.append(_node(lid, _lbl(row, "name", f"Load {idx}"), "load",
-                           bool(row.get("in_service", True)), p_mw=float(row.get("p_mw", 0))))
+                           bool(row.get("in_service", True)), p_mw=_opt_float(row, "p_mw") or 0.0))
         edges.append(_edge(f"{lid}_conn", lid, f"bus_{int(row['bus'])}", "connection", True))
 
+    bus_df = _get_table(net, "bus")
     summary = {
-        "n_buses": len(net.bus),
-        "n_lines": len(net.line),
-        "n_trafos": len(net.trafo),
-        "n_trafos3w": len(net.trafo3w),
-        "n_loads": len(net.load),
-        "n_gens": len(net.gen),
-        "n_sgens": len(net.sgen),
-        "n_ext_grid": len(net.ext_grid),
+        "n_buses": len(bus_df),
+        "n_lines": len(_get_table(net, "line")),
+        "n_trafos": len(_get_table(net, "trafo")),
+        "n_trafos3w": len(_get_table(net, "trafo3w")),
+        "n_loads": len(_get_table(net, "load")),
+        "n_gens": len(_get_table(net, "gen")),
+        "n_sgens": len(_get_table(net, "sgen")),
+        "n_ext_grid": len(ext_grid),
     }
 
     return {"nodes": nodes, "edges": edges, "summary": summary}

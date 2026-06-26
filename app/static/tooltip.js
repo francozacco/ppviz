@@ -1,6 +1,7 @@
 import { state } from './state.js';
 import { buildTooltipHtml, setStatus } from './utils.js';
 import { runSimulation, applyLoading } from './simulation.js';
+import { showElementDetail, clearElementDetail } from './detail.js';
 
 const tooltip         = document.getElementById('tooltip');
 const tooltipInfo     = document.getElementById('tooltip-info');
@@ -19,6 +20,7 @@ export function unpinTooltip() {
   tooltip.style.display    = 'none';
   tooltipBtn.style.display = '';
   tooltipPmwEdit.style.display = '';
+  clearElementDetail();
 }
 
 function updateTooltipBtn(elem) {
@@ -57,6 +59,7 @@ export function setupTooltips(cy) {
     tooltip.classList.add('pinned');
     tooltip.style.display = 'block';
     moveTooltip(evt.renderedPosition.x, evt.renderedPosition.y);
+    showElementDetail(id);
   });
 
   cy.on('tap', EDITABLE, evt => {
@@ -70,6 +73,12 @@ export function setupTooltips(cy) {
     tooltip.classList.add('pinned');
     tooltip.style.display = 'block';
     moveTooltip(evt.renderedPosition.x, evt.renderedPosition.y);
+    showElementDetail(id);
+  });
+
+  cy.on('tap', 'node[type = "bus"]', evt => {
+    const id = evt.target.id();
+    showElementDetail(id);
   });
 
   cy.on('tap', evt => { if (evt.target === cy) unpinTooltip(); });

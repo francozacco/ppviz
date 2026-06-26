@@ -1,6 +1,5 @@
 import { state } from './state.js';
 import { setStatus, loadingColor, buildTooltipHtml } from './utils.js';
-import { fetchAndDrawSensMatrix } from './sensitivity.js';
 
 const FLOW_DASH  = [8, 4];
 const FLOW_SPEED = 0.15;
@@ -19,7 +18,6 @@ export async function runSimulation() {
     const data = await res.json();
     if (!res.ok) { setStatus(data.detail || 'Power flow failed', 'error'); return; }
     applyLoading(data.loading, data.flows || {}, data.flows_mw || {});
-    fetchAndDrawSensMatrix();
   } catch (err) {
     setStatus('Network error: ' + err.message, 'error');
   } finally {
@@ -38,47 +36,47 @@ export function applyLoading(loading, flows, flows_mw) {
   }
   const entries = Object.entries(loading);
   if (!entries.length) {
-    setStatus('Power flow ran — no loading data (max_p_mw not set)', 'ok');
-    return;
-  }
-  entries.forEach(([id, pct]) => {
-    const color = loadingColor(pct);
-    if (id.startsWith('trafo3w_')) {
-      const node = state.cy.getElementById(id);
-      if (node.length) {
-        node.data('loading_pct', pct);
-        if (node.data('in_service')) {
-          node.style('border-color', color);
-          node.connectedEdges('[type = "trafo_conn"]').style('line-color', color);
+    setStatus('Power flow ran — no loading data', 'ok');
+  } else {
+    entries.forEach(([id, pct]) => {
+      const color = loadingColor(pct);
+      if (id.startsWith('trafo3w_')) {
+        const node = state.cy.getElementById(id);
+        if (node.length) {
+          node.data('loading_pct', pct);
+          if (node.data('in_service')) {
+            node.style('border-color', color);
+            node.connectedEdges('[type = "trafo_conn"]').style('line-color', color);
+          }
+        }
+      } else if (id.startsWith('trafo_')) {
+        const edge = state.cy.getElementById(id);
+        if (edge.length) {
+          edge.data('loading_pct', pct);
+          if (edge.data('in_service')) {
+            edge.style({
+              'line-color': color,
+              'mid-source-arrow-color': color,
+              'mid-target-arrow-color': color,
+            });
+          }
+        }
+      } else {
+        const edge = state.cy.getElementById(id);
+        if (edge.length) {
+          edge.data('loading_pct', pct);
+          if (edge.data('in_service')) edge.style('line-color', color);
         }
       }
-    } else if (id.startsWith('trafo_')) {
-      const edge = state.cy.getElementById(id);
-      if (edge.length) {
-        edge.data('loading_pct', pct);
-        if (edge.data('in_service')) {
-          edge.style({
-            'line-color': color,
-            'mid-source-arrow-color': color,
-            'mid-target-arrow-color': color,
-          });
-        }
-      }
-    } else {
-      const edge = state.cy.getElementById(id);
-      if (edge.length) {
-        edge.data('loading_pct', pct);
-        if (edge.data('in_service')) edge.style('line-color', color);
-      }
+    });
+    if (state.pinnedElemId) {
+      const pinned = state.cy.getElementById(state.pinnedElemId);
+      if (pinned.length) tooltipInfo.innerHTML = buildTooltipHtml(pinned.data());
     }
-  });
-  if (state.pinnedElemId) {
-    const pinned = state.cy.getElementById(state.pinnedElemId);
-    if (pinned.length) tooltipInfo.innerHTML = buildTooltipHtml(pinned.data());
+    setStatus('Power flow ran successfully', 'ok');
   }
   stopFlowAnimation();
   startFlowAnimation();
-  setStatus('Power flow ran successfully', 'ok');
 }
 
 export function resetFlowState() {

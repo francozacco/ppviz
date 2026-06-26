@@ -1,5 +1,6 @@
 import math
 
+import numpy as np
 import pandas as pd
 import pandapower as pp
 from fastapi import FastAPI, HTTPException, UploadFile
@@ -16,17 +17,38 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 _current_net: pp.pandapowerNet | None = None
 
 
+def _sanitize(obj: object) -> object:
+    """Recursively replace NaN/Inf floats with None so JSONResponse never raises."""
+    if isinstance(obj, float):
+        return None if not math.isfinite(obj) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(v) for v in obj]
+    return obj
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse("app/static/index.html")
 
 
+_DEMO_FILES: dict[str, str] = {
+    "case14custom": "app/demo/custom_case14_net.json",
+    "case9": "app/demo/case9_net.json",
+    "case9custom": "app/demo/custom_case9_net.json",
+}
+
+
 @app.get("/demo")
-async def load_demo_net() -> JSONResponse:
+async def load_demo_net(net_id: str = "case9") -> JSONResponse:
     global _current_net
-    net = pp.from_json("app/demo/custom_case14_net.json")
+    path = _DEMO_FILES.get(net_id)
+    if path is None:
+        raise HTTPException(400, f"Unknown demo net: {net_id}. Choose from: {list(_DEMO_FILES)}")
+    net = pp.from_json(path)
     _current_net = net
-    return JSONResponse(_build_graph(net))
+    return JSONResponse(_sanitize(_build_graph(net)))
 
 
 @app.post("/upload")
@@ -35,7 +57,7 @@ async def upload_net(file: UploadFile) -> JSONResponse:
     content = await file.read()
     net = _load_net(file.filename or "", content)
     _current_net = net
-    return JSONResponse(_build_graph(net))
+    return JSONResponse(_sanitize(_build_graph(net)))
 
 
 @app.post("/run")
@@ -47,34 +69,30 @@ async def run_powerflow() -> JSONResponse:
     except Exception as e:
         raise HTTPException(500, f"Power flow failed: {e}")
 
+    _empty = pd.DataFrame()
+    net_line = getattr(_current_net, "line", _empty)
+    net_trafo = getattr(_current_net, "trafo", _empty)
+    net_trafo3w = getattr(_current_net, "trafo3w", _empty)
+    res_line = getattr(_current_net, "res_line", _empty)
+    res_trafo = getattr(_current_net, "res_trafo", _empty)
+    res_trafo3w = getattr(_current_net, "res_trafo3w", _empty)
+
     loading: dict[str, float] = {}
-    _collect_loading(
-        loading, _current_net.line, _current_net.res_line,
-        ["p_from_mw", "p_to_mw"], "line",
-    )
-    _collect_loading(
-        loading, _current_net.trafo, _current_net.res_trafo,
-        ["p_hv_mw", "p_lv_mw"], "trafo",
-    )
-    _collect_loading(
-        loading, _current_net.trafo3w, _current_net.res_trafo3w,
-        ["p_hv_mw", "p_mv_mw", "p_lv_mw"], "trafo3w",
-    )
+    _collect_loading(loading, net_line, res_line, ["p_from_mw", "p_to_mw"], "line")
+    _collect_loading(loading, net_trafo, res_trafo, ["p_hv_mw", "p_lv_mw"], "trafo")
+    _collect_loading(loading, net_trafo3w, res_trafo3w, ["p_hv_mw", "p_mv_mw", "p_lv_mw"], "trafo3w")
 
     flows: dict[str, int] = {}
-    _collect_flows(flows, _current_net.res_line, "p_from_mw", "line")
-    _collect_flows(flows, _current_net.res_trafo, "p_hv_mw", "trafo")
-    _collect_trafo_3w_flows(flows, _current_net.res_trafo3w)
+    _collect_flows(flows, res_line, "p_from_mw", "line")
+    _collect_flows(flows, res_trafo, "p_hv_mw", "trafo")
+    _collect_trafo_3w_flows(flows, res_trafo3w)
 
     flows_mw: dict[str, float] = {}
-    _collect_flows_mw(flows_mw, _current_net.res_line, ["p_from_mw"], "line")
-    _collect_flows_mw(flows_mw, _current_net.res_trafo, ["p_hv_mw"], "trafo")
-    _collect_flows_mw(
-        flows_mw, _current_net.res_trafo3w,
-        ["p_hv_mw", "p_mv_mw", "p_lv_mw"], "trafo3w",
-    )
+    _collect_flows_mw(flows_mw, res_line, ["p_from_mw"], "line")
+    _collect_flows_mw(flows_mw, res_trafo, ["p_hv_mw"], "trafo")
+    _collect_flows_mw(flows_mw, res_trafo3w, ["p_hv_mw", "p_mv_mw", "p_lv_mw"], "trafo3w")
 
-    return JSONResponse({"loading": loading, "flows": flows, "flows_mw": flows_mw})
+    return JSONResponse(_sanitize({"loading": loading, "flows": flows, "flows_mw": flows_mw}))
 
 
 @app.get("/sensitivities")
@@ -87,7 +105,7 @@ async def get_sensitivities() -> JSONResponse:
         result = compute_sensitivities(_current_net)
     except Exception as e:
         raise HTTPException(500, f"Sensitivity computation failed: {e}")
-    return JSONResponse(result)
+    return JSONResponse(_sanitize(result))
 
 
 @app.patch("/element/{element_id}")
@@ -102,7 +120,7 @@ async def toggle_element(element_id: str) -> JSONResponse:
         raise HTTPException(404, f"Element {element_id} not found")
     new_state = not bool(df.at[idx, "in_service"])
     df.at[idx, "in_service"] = new_state
-    return JSONResponse({"in_service": new_state})
+    return JSONResponse(_sanitize({"in_service": new_state}))
 
 
 class _PmwUpdate(BaseModel):
@@ -120,14 +138,47 @@ async def update_element_p_mw(element_id: str, body: _PmwUpdate) -> JSONResponse
     if idx not in df.index:
         raise HTTPException(404, f"Element {element_id} not found")
     df.at[idx, "p_mw"] = body.p_mw
-    return JSONResponse({"p_mw": body.p_mw})
+    return JSONResponse(_sanitize({"p_mw": body.p_mw}))
+
+
+_SKIP_COLS: set[str] = {"geo"}
+
+
+@app.get("/element/{element_id}/data")
+async def get_element_data(element_id: str) -> JSONResponse:
+    if _current_net is None:
+        raise HTTPException(400, "No network loaded")
+    table, idx = _parse_element_id(element_id)
+    if table is None or idx is None:
+        raise HTTPException(400, f"Unknown element id: {element_id}")
+    df = _current_net[table]
+    if idx not in df.index:
+        raise HTTPException(404, f"Element {element_id} not found")
+    row = df.loc[idx]
+    name_val = row.get("name") if "name" in df.columns else None
+    try:
+        label = str(name_val).strip() if name_val is not None and not pd.isna(name_val) else element_id
+    except (TypeError, ValueError):
+        label = element_id
+    props: dict[str, object] = {"index": idx}
+    for col in df.columns:
+        if col in _SKIP_COLS or col.startswith("_") or col == "name":
+            continue
+        val = row[col]
+        try:
+            if pd.isna(val):
+                continue
+        except (TypeError, ValueError):
+            pass
+        props[col] = val.item() if hasattr(val, "item") else val
+    return JSONResponse(_sanitize({"type": table, "label": label, "props": props}))
 
 
 def _parse_element_id(element_id: str) -> tuple[str | None, int | None]:
     # trafo3w_ must be checked before trafo_ to avoid false prefix match
     for prefix, table in [
         ("trafo3w_", "trafo3w"), ("trafo_", "trafo"), ("line_", "line"),
-        ("sgen_", "sgen"), ("gen_", "gen"), ("load_", "load"),
+        ("bus_", "bus"), ("sgen_", "sgen"), ("gen_", "gen"), ("load_", "load"),
     ]:
         if element_id.startswith(prefix):
             try:
