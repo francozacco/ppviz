@@ -3,6 +3,7 @@ import { renderGraph } from './graph.js';
 import { runSimulation } from './simulation.js';
 import { initSearch } from './search.js';
 import { initLegend } from './legend.js';
+import { apiFetch } from './api.js';
 
 const fileInput   = document.getElementById('file-input');
 const fileNameEl  = document.getElementById('file-name');
@@ -27,7 +28,7 @@ function _applyNetData(data, label) {
 // ── Load demo net on startup ──────────────────────────────────────────────────
 (async () => {
   try {
-    const res  = await fetch('/demo');
+    const res  = await apiFetch('/demo');
     if (!res.ok) return;                   // endpoint not yet implemented — silent
     const data = await res.json();
     _applyNetData(data, 'case9 (demo)');
@@ -46,7 +47,7 @@ fileInput.addEventListener('change', async () => {
   fd.append('file', file);
 
   try {
-    const res  = await fetch('/upload', { method: 'POST', body: fd });
+    const res  = await apiFetch('/upload', { method: 'POST', body: fd });
     const data = await res.json();
     if (!res.ok) { setStatus(data.detail || 'Upload failed', 'error'); return; }
     _applyNetData(data, file.name);

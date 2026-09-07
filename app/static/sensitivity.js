@@ -1,4 +1,5 @@
 import { lerpColor, fitText } from './utils.js';
+import { apiFetch } from './api.js';
 
 const CELL  = 52;
 const ROW_W = 130;
@@ -16,7 +17,7 @@ let savedPanelWidth = null;
 
 export async function fetchAndDrawSensMatrix() {
   try {
-    const res  = await fetch('/sensitivities');
+    const res  = await apiFetch('/sensitivities');
     const data = await res.json();
     if (!res.ok) return;
     _drawSensMatrix(data.rows, data.cols, data.matrix);

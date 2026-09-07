@@ -2,6 +2,7 @@ import { state } from './state.js';
 import { buildTooltipHtml, setStatus } from './utils.js';
 import { runSimulation, applyLoading } from './simulation.js';
 import { showElementDetail, clearElementDetail } from './detail.js';
+import { apiFetch } from './api.js';
 
 const tooltip         = document.getElementById('tooltip');
 const tooltipInfo     = document.getElementById('tooltip-info');
@@ -92,7 +93,7 @@ tooltipPmwApply.addEventListener('click', async () => {
   const elem = state.cy.getElementById(id);
   tooltipPmwApply.disabled = true;
   try {
-    const res  = await fetch(`/element/${encodeURIComponent(id)}/p_mw`, {
+    const res  = await apiFetch(`/element/${encodeURIComponent(id)}/p_mw`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ p_mw: val }),
@@ -115,7 +116,7 @@ tooltipBtn.addEventListener('click', async () => {
   const elem = state.cy.getElementById(id);
   tooltipBtn.disabled = true;
   try {
-    const res  = await fetch(`/element/${encodeURIComponent(id)}`, { method: 'PATCH' });
+    const res  = await apiFetch(`/element/${encodeURIComponent(id)}`, { method: 'PATCH' });
     const data = await res.json();
     if (!res.ok) { setStatus(data.detail || 'Toggle failed', 'error'); return; }
     const { in_service } = data;

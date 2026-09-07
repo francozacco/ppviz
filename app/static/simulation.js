@@ -1,5 +1,6 @@
 import { state } from './state.js';
 import { setStatus, loadingColor, buildTooltipHtml } from './utils.js';
+import { apiFetch } from './api.js';
 
 const FLOW_DASH  = [8, 4];
 const FLOW_SPEED = 0.15;
@@ -14,7 +15,7 @@ export async function runSimulation() {
   runBtn.disabled = true;
   setStatus('Running DC power flow…', '');
   try {
-    const res  = await fetch('/run', { method: 'POST' });
+    const res  = await apiFetch('/run', { method: 'POST' });
     const data = await res.json();
     if (!res.ok) { setStatus(data.detail || 'Power flow failed', 'error'); return; }
     applyLoading(data.loading, data.flows || {}, data.flows_mw || {});

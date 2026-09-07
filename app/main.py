@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pandas as pd
 import pandapower as pp
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -14,7 +14,28 @@ from app.sensitivities import compute_sensitivities
 app = FastAPI(title="ppviz")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
-_current_net: pp.pandapowerNet | None = None
+_SESSION_HEADER = "X-Session-Id"
+_nets: dict[str, pp.pandapowerNet] = {}
+
+
+@app.middleware("http")
+async def _session_middleware(request: Request, call_next):
+    """Key network state off a client-generated per-tab id, not a cookie.
+
+    Cookies are shared by every tab of the same browser, so a cookie-based
+    session would still let one tab clobber another tab's network. The
+    frontend instead generates an id in sessionStorage (which IS scoped per
+    tab) and sends it on this header.
+    """
+    request.state.session_id = request.headers.get(_SESSION_HEADER) or "default"
+    return await call_next(request)
+
+
+def _require_net(session_id: str) -> pp.pandapowerNet:
+    net = _nets.get(session_id)
+    if net is None:
+        raise HTTPException(400, "No network loaded")
+    return net
 
 
 def _sanitize(obj: object) -> object:
@@ -41,41 +62,38 @@ _DEMO_FILES: dict[str, str] = {
 
 
 @app.get("/demo")
-async def load_demo_net(net_id: str = "case9") -> JSONResponse:
-    global _current_net
+async def load_demo_net(request: Request, net_id: str = "case9") -> JSONResponse:
     path = _DEMO_FILES.get(net_id)
     if path is None:
         raise HTTPException(400, f"Unknown demo net: {net_id}. Choose from: {list(_DEMO_FILES)}")
     net = pp.from_json(path)
-    _current_net = net
+    _nets[request.state.session_id] = net
     return JSONResponse(_sanitize(_build_graph(net)))
 
 
 @app.post("/upload")
-async def upload_net(file: UploadFile) -> JSONResponse:
-    global _current_net
+async def upload_net(request: Request, file: UploadFile) -> JSONResponse:
     content = await file.read()
     net = _load_net(file.filename or "", content)
-    _current_net = net
+    _nets[request.state.session_id] = net
     return JSONResponse(_sanitize(_build_graph(net)))
 
 
 @app.post("/run")
-async def run_powerflow() -> JSONResponse:
-    if _current_net is None:
-        raise HTTPException(400, "No network loaded")
+async def run_powerflow(request: Request) -> JSONResponse:
+    net = _require_net(request.state.session_id)
     try:
-        pp.rundcpp(_current_net)
+        pp.rundcpp(net)
     except Exception as e:
         raise HTTPException(500, f"Power flow failed: {e}")
 
     _empty = pd.DataFrame()
-    net_line = getattr(_current_net, "line", _empty)
-    net_trafo = getattr(_current_net, "trafo", _empty)
-    net_trafo3w = getattr(_current_net, "trafo3w", _empty)
-    res_line = getattr(_current_net, "res_line", _empty)
-    res_trafo = getattr(_current_net, "res_trafo", _empty)
-    res_trafo3w = getattr(_current_net, "res_trafo3w", _empty)
+    net_line = getattr(net, "line", _empty)
+    net_trafo = getattr(net, "trafo", _empty)
+    net_trafo3w = getattr(net, "trafo3w", _empty)
+    res_line = getattr(net, "res_line", _empty)
+    res_trafo = getattr(net, "res_trafo", _empty)
+    res_trafo3w = getattr(net, "res_trafo3w", _empty)
 
     loading: dict[str, float] = {}
     _collect_loading(loading, net_line, res_line, ["p_from_mw", "p_to_mw"], "line")
@@ -96,26 +114,24 @@ async def run_powerflow() -> JSONResponse:
 
 
 @app.get("/sensitivities")
-async def get_sensitivities() -> JSONResponse:
-    if _current_net is None:
-        raise HTTPException(400, "No network loaded")
-    if getattr(_current_net, "_ppc", None) is None:
+async def get_sensitivities(request: Request) -> JSONResponse:
+    net = _require_net(request.state.session_id)
+    if getattr(net, "_ppc", None) is None:
         raise HTTPException(400, "Run power flow first")
     try:
-        result = compute_sensitivities(_current_net)
+        result = compute_sensitivities(net)
     except Exception as e:
         raise HTTPException(500, f"Sensitivity computation failed: {e}")
     return JSONResponse(_sanitize(result))
 
 
 @app.patch("/element/{element_id}")
-async def toggle_element(element_id: str) -> JSONResponse:
-    if _current_net is None:
-        raise HTTPException(400, "No network loaded")
+async def toggle_element(request: Request, element_id: str) -> JSONResponse:
+    net = _require_net(request.state.session_id)
     table, idx = _parse_element_id(element_id)
     if table is None or idx is None:
         raise HTTPException(400, f"Unknown element id: {element_id}")
-    df = _current_net[table]
+    df = net[table]
     if idx not in df.index:
         raise HTTPException(404, f"Element {element_id} not found")
     new_state = not bool(df.at[idx, "in_service"])
@@ -128,13 +144,14 @@ class _PmwUpdate(BaseModel):
 
 
 @app.patch("/element/{element_id}/p_mw")
-async def update_element_p_mw(element_id: str, body: _PmwUpdate) -> JSONResponse:
-    if _current_net is None:
-        raise HTTPException(400, "No network loaded")
+async def update_element_p_mw(
+    request: Request, element_id: str, body: _PmwUpdate
+) -> JSONResponse:
+    net = _require_net(request.state.session_id)
     table, idx = _parse_element_id(element_id)
     if table not in ("gen", "sgen", "load") or idx is None:
         raise HTTPException(400, f"Element {element_id} does not support p_mw editing")
-    df = _current_net[table]
+    df = net[table]
     if idx not in df.index:
         raise HTTPException(404, f"Element {element_id} not found")
     df.at[idx, "p_mw"] = body.p_mw
@@ -145,13 +162,12 @@ _SKIP_COLS: set[str] = {"geo"}
 
 
 @app.get("/element/{element_id}/data")
-async def get_element_data(element_id: str) -> JSONResponse:
-    if _current_net is None:
-        raise HTTPException(400, "No network loaded")
+async def get_element_data(request: Request, element_id: str) -> JSONResponse:
+    net = _require_net(request.state.session_id)
     table, idx = _parse_element_id(element_id)
     if table is None or idx is None:
         raise HTTPException(400, f"Unknown element id: {element_id}")
-    df = _current_net[table]
+    df = net[table]
     if idx not in df.index:
         raise HTTPException(404, f"Element {element_id} not found")
     row = df.loc[idx]

@@ -1,4 +1,5 @@
 import { TYPE_LABELS } from './utils.js';
+import { apiFetch } from './api.js';
 
 const detailTitle    = document.getElementById('detail-title');
 const detailSubtitle = document.getElementById('detail-subtitle');
@@ -92,7 +93,7 @@ function _row(key, val) {
 
 export async function showElementDetail(elementId) {
   try {
-    const res = await fetch(`/element/${encodeURIComponent(elementId)}/data`);
+    const res = await apiFetch(`/element/${encodeURIComponent(elementId)}/data`);
     if (!res.ok) return;
     const { type, label, props } = await res.json();
 
