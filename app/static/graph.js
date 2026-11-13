@@ -92,7 +92,7 @@ const GRAPH_STYLE = [
     style: {
       'width': 2.5,
       'line-color': '#f59e0b',
-      'curve-style': 'straight',
+      'curve-style': 'bezier',
       'mid-source-arrow-shape': 'circle',
       'mid-source-arrow-fill': 'hollow',
       'mid-source-arrow-color': '#f59e0b',

@@ -7,32 +7,49 @@ const FLOW_SPEED = 0.15;
 
 let flowOffsets = {};
 let animFrame   = null;
+let lastMode    = 'dc';
 
-const runBtn      = document.getElementById('run-btn');
+const runBtns     = [document.getElementById('run-btn'), document.getElementById('run-ac-btn')];
 const tooltipInfo = document.getElementById('tooltip-info');
 
-export async function runSimulation() {
-  runBtn.disabled = true;
-  setStatus('Running DC power flow…', '');
+// Without an explicit mode, re-runs use the mode of the last run.
+export async function runSimulation(mode = lastMode) {
+  lastMode = mode;
+  runBtns.forEach(b => { b.disabled = true; });
+  setStatus(`Running ${mode.toUpperCase()} power flow…`, '');
   try {
-    const res  = await apiFetch('/run', { method: 'POST' });
+    const res  = await apiFetch(`/run?mode=${mode}`, { method: 'POST' });
     const data = await res.json();
     if (!res.ok) { setStatus(data.detail || 'Power flow failed', 'error'); return; }
-    applyLoading(data.loading, data.flows || {}, data.flows_mw || {});
+    applyLoading(data.loading, data.flows || {}, data.flows_mw || {}, data.mode, data.limits || {}, data.flows_pq || {});
   } catch (err) {
     setStatus('Network error: ' + err.message, 'error');
   } finally {
-    runBtn.disabled = false;
+    runBtns.forEach(b => { b.disabled = false; });
   }
 }
 
-export function applyLoading(loading, flows, flows_mw) {
+export function applyLoading(loading, flows, flows_mw, mode, limits, flows_pq) {
   state.cachedLoading = loading;
   if (flows !== undefined) state.cachedFlows = flows;
   if (flows_mw !== undefined) {
-    for (const [id, mw] of Object.entries(flows_mw)) {
+    // AC reports apparent power (MVA) against the S limit; DC reports P (MW).
+    const ac = mode === 'ac';
+    for (const [id, val] of Object.entries(flows_mw)) {
       const elem = state.cy.getElementById(id);
-      if (elem.length) elem.data('flow_mw', mw);
+      if (!elem.length) continue;
+      // data(name, undefined) is a getter in cytoscape, so stale values must be removed
+      elem.removeData('flow_mw flow_mva limit_mva flow_p_mw flow_q_mvar');
+      if (ac) {
+        elem.data({
+          flow_mva:    val,
+          limit_mva:   limits[id],
+          flow_p_mw:   flows_pq[id]?.p_mw,
+          flow_q_mvar: flows_pq[id]?.q_mvar,
+        });
+      } else {
+        elem.data('flow_mw', val);
+      }
     }
   }
   const entries = Object.entries(loading);

@@ -79,11 +79,24 @@ async def upload_net(request: Request, file: UploadFile) -> JSONResponse:
     return JSONResponse(_sanitize(_build_graph(net)))
 
 
+_POWERFLOW_RUNNERS = {"dc": pp.rundcpp, "ac": pp.runpp}
+
+# (p column, q column) for each terminal; q is only used by the AC power flow.
+_Side = tuple[str, str]
+_LINE_SIDES: list[_Side] = [("p_from_mw", "q_from_mvar"), ("p_to_mw", "q_to_mvar")]
+_TRAFO_SIDES: list[_Side] = [("p_hv_mw", "q_hv_mvar"), ("p_lv_mw", "q_lv_mvar")]
+_TRAFO3W_SIDES: list[_Side] = [
+    ("p_hv_mw", "q_hv_mvar"), ("p_mv_mw", "q_mv_mvar"), ("p_lv_mw", "q_lv_mvar"),
+]
+
+
 @app.post("/run")
-async def run_powerflow(request: Request) -> JSONResponse:
+async def run_powerflow(request: Request, mode: str = "dc") -> JSONResponse:
     net = _require_net(request.state.session_id)
+    if mode not in _POWERFLOW_RUNNERS:
+        raise HTTPException(400, f"Unknown mode: {mode}. Choose from: {list(_POWERFLOW_RUNNERS)}")
     try:
-        pp.rundcpp(net)
+        _POWERFLOW_RUNNERS[mode](net)
     except Exception as e:
         raise HTTPException(500, f"Power flow failed: {e}")
 
@@ -95,10 +108,12 @@ async def run_powerflow(request: Request) -> JSONResponse:
     res_trafo = getattr(net, "res_trafo", _empty)
     res_trafo3w = getattr(net, "res_trafo3w", _empty)
 
+    ac = mode == "ac"
     loading: dict[str, float] = {}
-    _collect_loading(loading, net_line, res_line, ["p_from_mw", "p_to_mw"], "line")
-    _collect_loading(loading, net_trafo, res_trafo, ["p_hv_mw", "p_lv_mw"], "trafo")
-    _collect_loading(loading, net_trafo3w, res_trafo3w, ["p_hv_mw", "p_mv_mw", "p_lv_mw"], "trafo3w")
+    limits: dict[str, float] = {}
+    _collect_loading(loading, limits, net_line, res_line, _LINE_SIDES, "line", ac)
+    _collect_loading(loading, limits, net_trafo, res_trafo, _TRAFO_SIDES, "trafo", ac)
+    _collect_loading(loading, limits, net_trafo3w, res_trafo3w, _TRAFO3W_SIDES, "trafo3w", ac)
 
     flows: dict[str, int] = {}
     _collect_flows(flows, res_line, "p_from_mw", "line")
@@ -106,11 +121,24 @@ async def run_powerflow(request: Request) -> JSONResponse:
     _collect_trafo_3w_flows(flows, res_trafo3w)
 
     flows_mw: dict[str, float] = {}
-    _collect_flows_mw(flows_mw, res_line, ["p_from_mw"], "line")
-    _collect_flows_mw(flows_mw, res_trafo, ["p_hv_mw"], "trafo")
-    _collect_flows_mw(flows_mw, res_trafo3w, ["p_hv_mw", "p_mv_mw", "p_lv_mw"], "trafo3w")
+    _collect_flows_mw(flows_mw, res_line, _LINE_SIDES[:1], "line", ac)
+    _collect_flows_mw(flows_mw, res_trafo, _TRAFO_SIDES[:1], "trafo", ac)
+    _collect_flows_mw(flows_mw, res_trafo3w, _TRAFO3W_SIDES, "trafo3w", ac)
 
-    return JSONResponse(_sanitize({"loading": loading, "flows": flows, "flows_mw": flows_mw}))
+    flows_pq: dict[str, dict[str, float]] = {}
+    if ac:
+        _collect_flows_pq(flows_pq, res_line, _LINE_SIDES[:1], "line")
+        _collect_flows_pq(flows_pq, res_trafo, _TRAFO_SIDES[:1], "trafo")
+        _collect_flows_pq(flows_pq, res_trafo3w, _TRAFO3W_SIDES, "trafo3w")
+
+    return JSONResponse(_sanitize({
+        "mode": mode,
+        "loading": loading,
+        "flows": flows,
+        "flows_mw": flows_mw,
+        "flows_pq": flows_pq,
+        "limits": limits,
+    }))
 
 
 @app.get("/sensitivities")
@@ -239,64 +267,103 @@ def _collect_trafo_3w_flows(out: dict[str, int], res3w: pd.DataFrame) -> None:
                 out[f"trafo3w_{idx}_{side}"] = 1 if val >= 0 else -1
 
 
+def _magnitude(res_df: pd.DataFrame, idx: object, side: _Side, ac: bool) -> float | None:
+    """|P| for DC, apparent power sqrt(P² + Q²) for AC; None if unavailable."""
+    p_col, q_col = side
+    if p_col not in res_df.columns:
+        return None
+    try:
+        p = float(res_df.at[idx, p_col])
+        q = float(res_df.at[idx, q_col]) if ac and q_col in res_df.columns else 0.0
+    except (TypeError, ValueError):
+        return None
+    val = math.hypot(p, q)
+    return val if math.isfinite(val) else None
+
+
 def _collect_flows_mw(
     out: dict[str, float],
     res_df: pd.DataFrame,
-    cols: list[str],
+    sides: list[_Side],
     prefix: str,
+    ac: bool,
 ) -> None:
+    """Store max flow magnitude per element (MW for DC, MVA for AC)."""
     if res_df is None or len(res_df) == 0:
         return
     for idx in res_df.index:
-        p_vals = []
-        for col in cols:
-            if col not in res_df.columns:
-                continue
-            try:
-                val = float(res_df.at[idx, col])
-                if math.isfinite(val):
-                    p_vals.append(abs(val))
-            except (TypeError, ValueError):
-                continue
-        if p_vals:
-            out[f"{prefix}_{idx}"] = max(p_vals)
+        vals = [_magnitude(res_df, idx, side, ac) for side in sides]
+        vals = [v for v in vals if v is not None]
+        if vals:
+            out[f"{prefix}_{idx}"] = max(vals)
+
+
+def _collect_flows_pq(
+    out: dict[str, dict[str, float]],
+    res_df: pd.DataFrame,
+    sides: list[_Side],
+    prefix: str,
+) -> None:
+    """Store signed P and Q at the terminal with the largest apparent power."""
+    if res_df is None or len(res_df) == 0:
+        return
+    for idx in res_df.index:
+        best: tuple[float, _Side] | None = None
+        for side in sides:
+            mag = _magnitude(res_df, idx, side, True)
+            if mag is not None and (best is None or mag > best[0]):
+                best = (mag, side)
+        if best is None:
+            continue
+        p_col, q_col = best[1]
+        out[f"{prefix}_{idx}"] = {
+            "p_mw": float(res_df.at[idx, p_col]),
+            "q_mvar": float(res_df.at[idx, q_col]),
+        }
 
 
 def _collect_loading(
     out: dict[str, float],
+    limits: dict[str, float],
     net_df: pd.DataFrame,
     res_df: pd.DataFrame,
-    res_cols: list[str],
+    sides: list[_Side],
     prefix: str,
+    ac: bool,
 ) -> None:
-    """Compute loading as max(|p_cols|) / max_p_mw * 100 for each element.
+    """Compute loading as max flow magnitude / limit * 100 for each element.
 
-    Elements without max_p_mw defined are skipped entirely (no colour change).
-    Elements where max_p_mw <= 0 are set to 0.0 (green — no limit defined).
+    DC uses max(|P|) / max_p_mw. AC uses max(S) / max_s_mva, falling back to
+    max_p_mw when max_s_mva is not defined. The limit used is stored in `limits`.
+
+    Elements without a limit defined are skipped entirely (no colour change).
+    Elements where the limit <= 0 are set to 0.0 (green — no limit defined).
     """
-    if "max_p_mw" not in net_df.columns:
+    limit_cols = ["max_s_mva", "max_p_mw"] if ac else ["max_p_mw"]
+    limit_col = next((c for c in limit_cols if c in net_df.columns), None)
+    if limit_col is None:
         return
     if res_df is None or len(res_df) == 0:
         return
     for idx in net_df.index:
         if idx not in res_df.index:
             continue
-        max_p_raw = net_df.at[idx, "max_p_mw"]
+        max_raw = net_df.at[idx, limit_col]
+        if ac and limit_col == "max_s_mva" and pd.isna(max_raw) and "max_p_mw" in net_df.columns:
+            max_raw = net_df.at[idx, "max_p_mw"]
         try:
-            if pd.isna(max_p_raw):
+            if pd.isna(max_raw):
                 continue
         except (TypeError, ValueError):
             pass
-        max_p = float(max_p_raw)
-        if max_p <= 0.0:
-            out[f"{prefix}_{idx}"] = 0.0
+        max_val = float(max_raw)
+        key = f"{prefix}_{idx}"
+        limits[key] = max_val
+        if max_val <= 0.0:
+            out[key] = 0.0
             continue
-        p_vals = [
-            abs(float(res_df.at[idx, col]))
-            for col in res_cols
-            if col in res_df.columns and math.isfinite(float(res_df.at[idx, col]))
-        ]
-        if not p_vals:
+        vals = [_magnitude(res_df, idx, side, ac) for side in sides]
+        vals = [v for v in vals if v is not None]
+        if not vals:
             continue
-        out[f"{prefix}_{idx}"] = max(p_vals) / max_p * 100.0
-
+        out[key] = max(vals) / max_val * 100.0

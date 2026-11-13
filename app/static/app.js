@@ -8,6 +8,7 @@ import { apiFetch } from './api.js';
 const fileInput   = document.getElementById('file-input');
 const fileNameEl  = document.getElementById('file-name');
 const runBtn      = document.getElementById('run-btn');
+const runAcBtn    = document.getElementById('run-ac-btn');
 const searchInput = document.getElementById('search-input');
 const summaryEl   = document.getElementById('summary-content');
 
@@ -19,6 +20,7 @@ function _applyNetData(data, label) {
   fileNameEl.textContent = label;
   setStatus(`${data.summary.n_buses} buses loaded`, 'ok');
   runBtn.disabled = false;
+  runAcBtn.disabled = false;
   searchInput.disabled = false;
   searchInput.value = '';
   _renderSummary(data.summary);
@@ -68,4 +70,5 @@ function _renderSummary(s) {
     .join('');
 }
 
-runBtn.addEventListener('click', runSimulation);
+runBtn.addEventListener('click', () => runSimulation('dc'));
+runAcBtn.addEventListener('click', () => runSimulation('ac'));

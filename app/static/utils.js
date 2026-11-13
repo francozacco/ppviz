@@ -34,8 +34,15 @@ export function buildTooltipHtml(d) {
   lines.push(`Type: <b>${typeLabel}</b>`);
   if (d.vn_kv       !== undefined) lines.push(`Voltage: <b>${d.vn_kv} kV</b>`);
   if (d.p_mw        !== undefined) lines.push(`P: <b>${d.p_mw.toFixed(2)} MW</b>`);
-  if (d.max_p_mw    != null)       lines.push(`Max P: <b>${d.max_p_mw.toFixed(2)} MW</b>`);
-  if (d.flow_mw     !== undefined) lines.push(`Current P: <b>${d.flow_mw.toFixed(2)} MW</b>`);
+  if (d.flow_mva !== undefined) {
+    if (d.limit_mva != null) lines.push(`Max S: <b>${d.limit_mva.toFixed(2)} MVA</b>`);
+    lines.push(`Current S: <b>${d.flow_mva.toFixed(2)} MVA</b>`);
+    if (d.flow_p_mw   != null) lines.push(`Current P: <b>${d.flow_p_mw.toFixed(2)} MW</b>`);
+    if (d.flow_q_mvar != null) lines.push(`Current Q: <b>${d.flow_q_mvar.toFixed(2)} MVAr</b>`);
+  } else {
+    if (d.max_p_mw != null)    lines.push(`Max P: <b>${d.max_p_mw.toFixed(2)} MW</b>`);
+    if (d.flow_mw  !== undefined) lines.push(`Current P: <b>${d.flow_mw.toFixed(2)} MW</b>`);
+  }
   if (d.loading_pct !== undefined) lines.push(`Loading: <b>${d.loading_pct.toFixed(1)} %</b>`);
   lines.push(`In service: <b>${d.in_service ? '✓' : '✗'}</b>`);
   return lines.join('<br>');
